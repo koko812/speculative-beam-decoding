@@ -1,0 +1,122 @@
+[
+    {
+        "prompt": "What is the capital of France?",
+        "answer": "Paris"
+    },
+    {
+        "prompt": "What is 2 + 2?",
+        "answer": "4"
+    },
+    {
+        "prompt": "Who wrote '1984'?",
+        "answer": "George Orwell"
+    },
+    {
+        "prompt": "What is the chemical symbol for water?",
+        "answer": "H2O"
+    },
+    {
+        "prompt": "What planet is known as the Red Planet?",
+        "answer": "Mars"
+    },
+    {
+        "prompt": "Who painted the Mona Lisa?",
+        "answer": "Leonardo da Vinci"
+    },
+    {
+        "prompt": "What is the largest mammal?",
+        "answer": "Blue whale"
+    },
+    {
+        "prompt": "In which country is the Great Pyramid of Giza?",
+        "answer": "Egypt"
+    },
+    {
+        "prompt": "What is the boiling point of water in Celsius?",
+        "answer": "100"
+    },
+    {
+        "prompt": "What is the square root of 49?",
+        "answer": "7"
+    },
+    {
+        "prompt": "Who discovered gravity?",
+        "answer": "Isaac Newton"
+    },
+    {
+        "prompt": "What is the capital of Japan?",
+        "answer": "Tokyo"
+    },
+    {
+        "prompt": "What gas do plants absorb from the atmosphere?",
+        "answer": "Carbon dioxide"
+    },
+    {
+        "prompt": "What is the smallest prime number?",
+        "answer": "2"
+    },
+    {
+        "prompt": "Which ocean is the largest?",
+        "answer": "Pacific Ocean"
+    },
+    {
+        "prompt": "Who is the author of 'Harry Potter'?",
+        "answer": "J.K. Rowling"
+    },
+    {
+        "prompt": "What is the hardest natural substance?",
+        "answer": "Diamond"
+    },
+    {
+        "prompt": "What is the main ingredient in bread?",
+        "answer": "Flour"
+    },
+    {
+        "prompt": "How many legs does a spider have?",
+        "answer": "8"
+    },
+    {
+        "prompt": "What do bees produce?",
+        "answer": "Honey"
+    },
+    {
+        "prompt": "What is the capital of Italy?",
+        "answer": "Rome"
+    },
+    {
+        "prompt": "What is the freezing point of water in Celsius?",
+        "answer": "0"
+    },
+    {
+        "prompt": "Who was the first man on the moon?",
+        "answer": "Neil Armstrong"
+    },
+    {
+        "prompt": "How many continents are there?",
+        "answer": "7"
+    },
+    {
+        "prompt": "What is the opposite of hot?",
+        "answer": "Cold"
+    },
+    {
+        "prompt": "Which planet has rings?",
+        "answer": "Saturn"
+    },
+    {
+        "prompt": "What do cows drink?",
+        "answer": "Water"
+    },
+    {
+        "prompt": "What is 10 divided by 2?",
+        "answer": "5"
+    },
+    {
+        "prompt": "What is the primary color of bananas?",
+        "answer": "Yellow"
+    },
+    {
+        "prompt": "What is the national sport of Japan?",
+        "answer": "Sumo"
+    }
+]

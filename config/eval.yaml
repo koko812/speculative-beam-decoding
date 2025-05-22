@@ -1,0 +1,8 @@
+dataset: datasets/qa_dataset.json
+target_model: Qwen/Qwen2.5-3B-Instruct
+draft_model: Qwen/Qwen2.5-0.5B
+decode:
+  modes: ["speculative"]
+  k: 4
+  num_beams: 5
+  max_tokens: 50

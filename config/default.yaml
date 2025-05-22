@@ -1,6 +1,6 @@
 project_name: specbeam-study
 
-draft_model: Qwen/Qwen2.5-3B-Instruct
+draft_model: Qwen/Qwen2.5-0.5B-Instruct
 target_model: Qwen/Qwen2.5-3B-Instruct
 
 
@@ -12,7 +12,7 @@ debug:
   render_input_text: true
 
 decode:
-  mode: speculative  # or "beam"
+  mode: greedy  # ← greedy / beam / speculative
   k: 4
   max_tokens: 50
 
@@ -23,4 +23,7 @@ prompts:
   - "What is the meaning of consciousness?"
   - "Once upon a time in a digital world,"
 
+logging:
+  enabled: true
+  path: logs/outputs.jsonl
 

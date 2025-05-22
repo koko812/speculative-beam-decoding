@@ -1,3 +1,76 @@
+# 🧪 Evaluate QA Accuracy に関する進捗ログ（v2 - 2025-05-23）
+
+## 🧭 概要
+
+本フェーズでは、speculative decoding の基本動作を確認・可視化するためのベースライン評価を整備し、greedy / beam / speculative 各方式の出力を QA タスク上で比較検証した。特に、speculative decoding における draft モデルと target モデルの挙動差が精度に与える影響を観察することに主眼を置いた。
+
+---
+
+## ✅ 評価スクリプトの拡張
+
+* `evaluate.py` において YAML 設定ファイルから複数モード（greedy, beam, speculative）を同時評価可能な構造へ拡張。
+* `datasets/qa_dataset.json` を導入し、30問の QA に対して自動精度評価が可能に。
+* 出力は各プロンプトに対して `[Prompt]`, `[Output]`, `[Answer]` の形式でログ表示・評価される。
+
+---
+
+## 📊 精度結果（初回ベンチマーク）
+
+| モード         | 正答数 | 正答率   |
+| ----------- | --- | ----- |
+| greedy      | 12  | 40.0% |
+| beam (5本)   | 11  | 36.7% |
+| speculative | 0   | 0.0%  |
+
+> speculative モードの精度が極端に低い理由を解析するため、内部の token accept ロジックを可視化するデバッグロガーを導入。
+
+---
+
+## 🔍 Speculative Decoding の問題点
+
+* draft モデルの生成出力が、ターゲットモデルの予測と一致せずほぼ毎回 fallback。
+* draft 側の設定が `do_sample=True`, `top_k=50`, `temperature=0.7` とランダム性が強すぎ、QA タスクでは不適。
+* draft 出力に ChatTemplate 系の文言（"You are", "Human:", etc.）が混入しやすく、ターゲットの予測と構文的に乖離。
+
+---
+
+## 🔧 改良と今後の展望
+
+### 現在の改善内容
+
+* `speculative_generate()` にトークンごとのログ記録と fallback 検出機能を追加。
+* `evaluate.py` をマルチモード対応に変更し、mode 毎に独立した出力を得られるように調整。
+* `speculative_generate()` の戻り値をトークン ID に統一し、外部でデコード処理する構成へ変更。
+
+### 今後の技術的検討事項
+
+1. **accept 判定を softmax 比較ベースへ（p\_target / p\_draft）**
+2. **Gumbel Sampling + Top-k 抽出による安定した draft 提案の実装**
+3. **fallback 時の再サンプリングを精度保証付きで実行する構造化**
+4. **既存実装（speculative-decoding-main）との統合検証**
+
+---
+
+## 📂 関連ファイル
+
+| ファイルパス                       | 内容                              |
+| ---------------------------- | ------------------------------- |
+| `logs/speculative_debug.log` | デバッグ用ステップログ出力                   |
+| `datasets/qa_dataset.json`   | QA タスクデータ（30問）                  |
+| `experiments/evaluate.py`    | ベンチマーク評価スクリプト（multi-mode対応）     |
+| `decoding/speculative.py`    | 改良版 `speculative_generate()` 実装 |
+
+---
+
+次フェーズでは、正答率向上と fallback 削減の両立を目指し、accept ロジックと draft 生成の精度制御に焦点を当てていく予定である。
+
+</br>
+</br>
+</br>
+</br>
+</br>
+
+
 # 🧪 Experiment Report: Speculative Decoding + Beam Search with ChatTemplate Models
 
 ## 1. 実装内容

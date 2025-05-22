@@ -1,0 +1,488 @@
+# 📁 Project Directory Tree
+```
+.
+├── README.md
+├── REPORT.md
+├── config
+│   └── default.yaml
+├── decoding
+│   ├── beam_search.py
+│   └── speculative.py
+├── experiments
+│   └── run.py
+├── export_project.sh
+├── main.py
+├── models
+│   ├── load_models.py
+│   └── prompt_renderer.py
+├── project_dump.txt
+├── pyproject.toml
+├── setup.sh
+└── uv.lock
+
+5 directories, 14 files
+```
+
+# 📄 .py ファイル一覧
+
+## ▶️ ./decoding/beam_search.py
+```py
+# decoding/beam_search.py
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+def beam_generate(model, tokenizer, input_ids, device, num_beams=5, max_tokens=50):
+    with torch.no_grad():
+        output = model.generate(
+            input_ids.to(device),
+            num_beams=num_beams,
+            max_new_tokens=max_tokens,
+            early_stopping=True,
+            pad_token_id=tokenizer.eos_token_id
+        )
+    return tokenizer.decode(output[0], skip_special_tokens=True)
+```
+
+## ▶️ ./decoding/speculative.py
+```py
+import torch
+from transformers import LogitsProcessorList, MinLengthLogitsProcessor
+from models.prompt_renderer import render_prompt
+
+def speculative_generate(draft_model, target_model, tokenizer, input_ids, device, k=4, max_tokens=50):
+    generated = input_ids.clone()
+
+    while generated.shape[1] < max_tokens:
+        with torch.no_grad():
+            draft_outputs = draft_model.generate(
+                generated,
+                max_new_tokens=k,
+                do_sample=True,
+                top_k=50,
+                temperature=0.7,
+                pad_token_id=tokenizer.eos_token_id
+            )
+
+        draft_tokens = draft_outputs[:, generated.shape[1]:]
+        accepted_tokens = []
+
+        for i in range(draft_tokens.shape[1]):
+            current_input = torch.cat([generated, draft_tokens[:, :i]], dim=-1)
+            with torch.no_grad():
+                target_outputs = target_model(current_input)
+                next_token_logits = target_outputs.logits[:, -1, :]
+                predicted_token = torch.argmax(next_token_logits, dim=-1)
+
+            if predicted_token.item() == draft_tokens[:, i].item():
+                accepted_tokens.append(draft_tokens[:, i])
+            else:
+                with torch.no_grad():
+                    fallback = target_model.generate(
+                        current_input,
+                        max_new_tokens=1,
+                        pad_token_id=tokenizer.eos_token_id
+                    )
+                generated = fallback
+                break
+        else:
+            if accepted_tokens:
+                accepted = torch.cat(accepted_tokens, dim=-1).unsqueeze(0)
+                generated = torch.cat([generated, accepted], dim=-1)
+
+    return tokenizer.decode(generated[0], skip_special_tokens=True)
+
+```
+
+## ▶️ ./experiments/run.py
+```py
+import sys, os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import hydra
+from omegaconf import DictConfig, OmegaConf
+import wandb
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+from models.load_models import load_model_and_tokenizer
+from models.prompt_renderer import render_prompt  # ✅ 追加
+from decoding.speculative import speculative_generate
+from decoding.beam_search import beam_generate
+
+@hydra.main(version_base=None, config_path="../config", config_name="default")
+def main(cfg: DictConfig):
+    print("\n=== Experiment Config ===")
+    print(OmegaConf.to_yaml(cfg))
+
+    wandb.init(
+        project=cfg.project_name,
+        config=OmegaConf.to_container(cfg, resolve=True)
+    )
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[INFO] Using device: {device}")
+
+    draft_model, draft_tokenizer = load_model_and_tokenizer(cfg.draft_model, device)
+    target_model, target_tokenizer = load_model_and_tokenizer(cfg.target_model, device)
+    print(f"[INFO] Draft model: {cfg.draft_model}")
+    print(f"[INFO] Target model: {cfg.target_model}")
+
+    for i, prompt in enumerate(cfg.prompts):
+        print(f"\n[Prompt {i+1}] {prompt}")
+
+        # ✅ ここで input_ids を準備（ChatTemplate対応）
+        inputs = render_prompt(
+            prompt,
+            tokenizer=draft_tokenizer if cfg.decode.mode == "speculative" else target_tokenizer,
+            use_system_prompt=cfg.chat.use_system_prompt,
+            system_prompt=cfg.chat.system_prompt,
+            debug=cfg.debug.render_input_text
+        )
+        input_ids = inputs.input_ids.to(device)
+
+        if cfg.decode.mode == "speculative":
+            output = speculative_generate(
+                draft_model, target_model, draft_tokenizer,
+                input_ids, device,
+                k=cfg.decode.k,
+                max_tokens=cfg.decode.max_tokens
+            )
+        else:
+            output = beam_generate(
+                target_model, target_tokenizer,
+                input_ids, device,
+                max_tokens=cfg.decode.max_tokens
+            )
+
+        print("\n=== Output ===")
+        print(output)
+        wandb.log({f"prompt_{i+1}": prompt, f"output_{i+1}": output})
+
+if __name__ == "__main__":
+    main()
+```
+
+## ▶️ ./main.py
+```py
+def main():
+    print("Hello from speculative-beam-decoding!")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+## ▶️ ./models/load_models.py
+```py
+# models/load_models.py
+from transformers import AutoTokenizer, AutoModelForCausalLM
+
+def load_model_and_tokenizer(model_name, device):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name).to(device)  # ← GPU対応
+    model.eval()
+    return model, tokenizer
+```
+
+## ▶️ ./models/prompt_renderer.py
+```py
+from transformers import BatchEncoding
+import torch
+
+def render_prompt(prompt, tokenizer, use_system_prompt=False, system_prompt=None, debug=False):
+    can_use_chat_template = (
+        hasattr(tokenizer, "chat_template")
+        and tokenizer.chat_template is not None
+    )
+
+    if can_use_chat_template:
+        messages = []
+        if use_system_prompt and system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        if debug:
+            rendered = tokenizer.apply_chat_template(messages, tokenize=False)
+            print("\n[DEBUG] Input rendered by ChatTemplate:\n" + rendered)
+
+        result = tokenizer.apply_chat_template(messages, return_tensors="pt")
+        # ✅ 戻り値が Tensor の場合、自動でラップする
+        if isinstance(result, torch.Tensor):
+            return BatchEncoding({"input_ids": result})
+        return result
+
+    else:
+        if debug:
+            print("\n[DEBUG] Raw prompt input:\n" + prompt)
+        return tokenizer(prompt, return_tensors="pt")
+```
+
+# 📄 .md ファイル一覧
+
+## ▶️ ./README.md
+```md
+# 🚀 Speculative Beam Decoding: Combining Speed and Quality in Language Generation
+
+This repository explores the combination of **Speculative Decoding** and **Beam Search** for efficient and high-quality language generation using Transformer-based language models.
+
+---
+
+## 📌 Motivation
+
+While **Speculative Decoding** accelerates generation by leveraging a fast draft model and validating outputs with a slower, more accurate target model, **Beam Search** improves output quality through breadth in candidate exploration.
+
+This project investigates:
+- How speculative decoding can **bootstrap multiple beams** efficiently
+- How beam search can **refine rejected completions** from speculative drafts
+- The trade-offs in **speed vs. coherence/quality** when combining both
+
+---
+
+## 🧠 Conceptual Overview
+
+```mermaid
+graph TD
+    A[Input Prompt] --> B{Draft Model}
+    B --> C[Drafted Beams (Top-k)]
+    C --> D{Verified by Target Model}
+    D -->|Accept| E[Keep Beam]
+    D -->|Reject| F{Beam Search Correction}
+    F --> G[Final Output]
+    E --> G
+```
+
+- **Drafting**: Fast model (e.g., DistilGPT2) proposes multiple beams.
+- **Verification**: Target model (e.g., GPT2 or GPT-J) checks validity.
+- **Fallback**: Beam search is invoked on rejected branches to recover quality.
+
+---
+
+## 🔧 Project Structure
+
+```
+speculative-beam-decoding/
+├── README.md
+├── requirements.txt
+├── config/
+│   └── default.yaml
+├── models/
+│   ├── load_models.py
+│   └── utils.py
+├── decoding/
+│   ├── speculative.py
+│   └── beam_search.py
+├── experiments/
+│   └── run_ablation.py
+├── analysis/
+│   └── eval_metrics.py
+└── notebooks/
+    └── exploratory.ipynb
+```
+
+---
+
+## 🚀 Getting Started
+
+### 1. Clone & Install Dependencies
+
+```bash
+git clone https://github.com/your-username/speculative-beam-decoding.git
+cd speculative-beam-decoding
+pip install -r requirements.txt
+```
+
+### 2. Run a Sample
+
+```bash
+python experiments/run_ablation.py --prompt "The future of AI is"
+```
+
+---
+
+## 📊 Evaluation
+
+Metrics used:
+- **Latency**: Tokens/sec
+- **Perplexity** (on verified output)
+- **BLEU / ROUGE** (on downstream summarization)
+- **Beam diversity**
+
+Compare:
+- Greedy decoding
+- Beam search
+- Speculative decoding
+- Speculative + beam hybrid
+
+---
+
+## 🏗️ Planned Features
+
+- [ ] Multi-beam speculative validation
+- [ ] Token-level fallback and correction
+- [ ] GPU batch-mode speculative beam
+- [ ] Web demo (Streamlit or Gradio)
+- [ ] Integration with LLaMA2 or GPT-NeoX
+
+---
+
+## 🧪 Sample Output
+
+> **Prompt**: "In the year 2050, humans and machines will"
+
+✅ *Draft model*: "In the year 2050, humans and machines will coexist in harmony and share resources for the betterment"
+
+✅ *Target model verified*: ✓✓✓✓✓✓✗✗
+
+🔁 *Beam search fallback*: "cooperate on sustainable projects"
+
+🧾 *Final*: "In the year 2050, humans and machines will cooperate on sustainable projects."
+
+---
+
+## 📚 References
+
+- OpenAI, "Accelerating LLMs with Speculative Decoding" (2023)
+- Google, "Beam Search Strategies for Neural Text Generation"
+- Hugging Face `transformers` library
+
+---
+
+## 🧑‍💻 Author
+
+Created by [Your Name](https://github.com/your-username).  
+Feel free to open issues, discussions, or PRs!
+
+```
+
+## ▶️ ./REPORT.md
+```md
+# 🧪 Experiment Report: Speculative Decoding + Beam Search with ChatTemplate Models
+
+## 1. 実装内容
+
+本実験は、以下の要素を統合的に組み込んだ**推論効率向上のための比較実験基盤**である：
+
+- 🤖 **Speculative Decoding** の実装（草案モデル + 本番モデルの協調生成）
+- 🎯 **Beam Search** の実装（単一モデルによる幅探索型デコード）
+- 🔧 **Hydra + W&B** による柔軟な設定管理・実験ログ保存
+- 🧩 **ChatTemplate 対応**：`tokenizer.apply_chat_template()` による統一されたチャット入力構成
+- ⚙️ `render_prompt()` 関数により CausalLM / Chat 型を統合的に処理
+- CLI で切替可能な `system_prompt`, `debug.render_input_text` による入力可視化
+
+---
+
+## 2. 実装の変遷
+
+### ✅ 初期構成
+- `distilgpt2` / `gpt2` を使用した **Speculative Decoding** のトイ実装
+- `prompt` をコード内でハードコーディング
+- `tokenizer(prompt)` によるプレーンなプロンプト生成
+- 警告（`attention_mask not set`）が出るも無視
+
+### 🔄 段階的進化
+1. `prompt` を `config/default.yaml` に移動 → CLI から差し替え可能に
+2. `prompts: [ ... ]` による **複数プロンプトバッチ評価** に対応
+3. `render_prompt()` の導入により **ChatTemplate モデルの統合**
+4. `debug.render_input_text` による **入力可視化** のトグル実装
+5. `input_ids` を run.py 側で統一生成し、`speculative_generate` / `beam_generate` に渡す方式へ移行
+6. `tokenizer.chat_template is not None` による安全判定導入
+7. `TinyLlama-Chat` → `Gemma 3` → `Qwen2.5-3B-Instruct` へのモデル進化
+
+---
+
+## 3. 気づいたこと・学び
+
+- ✅ ChatTemplate は HuggingFace で徐々に標準化されつつあるが、返り値が `Tensor` のみの場合もあり注意（要 `BatchEncoding` ラップ）
+- ⚠️ `hasattr(tokenizer, "apply_chat_template")` だけでは不十分。`tokenizer.chat_template is not None` のチェックが本質
+- ✅ `prompt_renderer` 関数にシステムプロンプトやデバッグ機能を統合することで、実験時の挙動を即可視化できた
+- ✅ モデルによって `system_prompt` の効果が明確に異なるため、CLIからの切替が非常に有用
+- ✅ `TinyLlama` は軽量だが内容は浅く、`Zephyr`, `Gemma`, `Qwen` などの ChatTemplate 系モデルはより自然な出力を示した
+- ✅ `speculative decoding` は draft モデルの品質に大きく依存し、低品質だと target model が追いつき fallback 連発になりやすい
+- ✅ `torch._dynamo.exc.Unsupported` などの内部エラーはモデルの transformer 実装が新しすぎる場合に起こる（Gemma3）
+
+---
+
+## 4. 実装したデコード手法の概要
+
+### 🧠 Speculative Decoding
+
+複数モデル（draft + target）を用いて、高速性と品質を両立する方法：
+
+1. **草案モデル（draft）** が `k` 個のトークンを予測（高速）
+2. **本番モデル（target）** がそのトークンを逐次検証
+3. 不一致があれば fallback（target による再生成）
+4. 一致したトークンはまとめて採用し高速化
+
+```text
+[Prompt] → [草案モデル → kトークン生成] → [targetモデルで検証] → 一致？ → YES → 採用 / NO → fallback
+```
+
+- `generate()` の `top_k`, `temperature` により draft の多様性を制御
+- 高品質な草案を出せれば、生成速度が最大5倍以上に向上する場合も
+
+---
+
+### 🎯 Beam Search
+
+従来の探索型生成方式：
+
+- 予測の際に「最も確からしい `n` 本のビーム（文脈）」を残しつつ展開
+- 最終的に最良のビームを選択
+
+```text
+Step 1: 現在のトークンに対し top-n 候補を展開
+Step 2: 各候補について再帰的に探索
+Step 3: 合計確率が最大の系列を出力
+```
+
+- 多様性に乏しいが、決定的で安定した生成に強い
+- `num_beams` のチューニングが鍵
+
+---
+
+## 📁 使用モデル一覧と所感
+
+| モデル | 使用可否 | ChatTemplate | 所感 |
+|--------|----------|--------------|------|
+| distilgpt2 / gpt2 | ✅ | ❌ | トイ実験には軽くて良いが出力が単調 |
+| TinyLlama-Chat | ✅ | ✅ | 超軽量・即応答だが知識は浅め |
+| Gemma 3 4B | ❌（エラー） | ✅ | ChatTemplateありだが Transformers 側未対応あり |
+| Zephyr 1.3B | ✅ | ✅ | 高品質・軽量で実用向き |
+| Qwen2.5-3B-Instruct | ✅ | ✅ | 多言語＋ChatTemplate対応、推奨モデル |
+
+---
+
+以上が、本実験で得られた構成・知見のまとめです。今後はモデル比較、system prompt制御、出力品質評価（BLEU, perplexity）などに拡張できます。```
+
+# 📄 .yaml ファイル一覧
+
+## ▶️ ./config/default.yaml
+```yaml
+project_name: specbeam-study
+
+draft_model: Qwen/Qwen2.5-3B-Instruct
+target_model: Qwen/Qwen2.5-3B-Instruct
+
+
+chat:
+  use_system_prompt: true
+  system_prompt: "You are a concise and helpful assistant."
+
+debug:
+  render_input_text: true
+
+decode:
+  mode: speculative  # or "beam"
+  k: 4
+  max_tokens: 50
+
+prompts:
+  - "The future of AI is"
+  - "In 2050, machines and humans will collaborate to"
+  - "Explain the concept of speculative decoding"
+  - "What is the meaning of consciousness?"
+  - "Once upon a time in a digital world,"
+
+
+```
+
