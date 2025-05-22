@@ -1,0 +1,24 @@
+project_name: specbeam-study
+draft_model: microsoft/phi-2
+target_model: microsoft/phi-2
+
+chat:
+  use_system_prompt: true
+  system_prompt: "You are a concise and helpful assistant."
+
+debug:
+  render_input_text: true
+
+decode:
+  mode: speculative  # or "beam"
+  k: 4
+  max_tokens: 50
+
+prompts:
+  - "The future of AI is"
+  - "In 2050, machines and humans will collaborate to"
+  - "Explain the concept of speculative decoding"
+  - "What is the meaning of consciousness?"
+  - "Once upon a time in a digital world,"
+
+

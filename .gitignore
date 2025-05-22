@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.log
+*.tmp
+*.pkl
+*.pt
+*.ckpt
+
+# Virtualenv
+.venv/
+env/
+venv/
+
+# VS Code
+.vscode/
+
+# Hydra logs
+outputs/
+multirun/
+logs/
+
+# wandb logs
+wandb/
+
+# pyright, mypy, others
+.mypy_cache/
+.pyre/
+.pytype/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# uv/lock
+uv.lock
+
+# dotenv (if you use)
+.env
+
