@@ -37,14 +37,17 @@ def main(cfg: DictConfig):
         print(f"\n[Prompt {i+1}] {prompt}")
 
         tokenizer = draft_tokenizer if cfg.decode.mode == "speculative" else target_tokenizer
+        use_chat_template = False if cfg.decode.mode == "speculative" else True
 
         inputs = render_prompt(
             prompt,
             tokenizer=tokenizer,
             use_system_prompt=cfg.chat.use_system_prompt,
             system_prompt=cfg.chat.system_prompt,
-            debug=cfg.debug.render_input_text
+            debug=cfg.debug.render_input_text,
+            use_chat_template=use_chat_template  # ✅ 明示的に渡す
         )
+
         input_ids = inputs.input_ids.to(device)
 
         # ベンチマーク開始

@@ -1,0 +1,15 @@
+target_model: Qwen/Qwen2.5-3B-Instruct
+
+chat:
+  use_system_prompt: true
+  system_prompt: "You are a helpful assistant."
+
+decode:
+  max_tokens: 50
+  beam_widths: [1, 3, 5, 10]
+  use_chat_template: true  # ✅ 追加
+
+prompts:
+  - "The future of AI is"
+  - "Once upon a time"
+  - "In 2050, humans and machines will"

@@ -20,16 +20,13 @@ DECODERS = {
     "speculative": speculative_generate,
 }
 
-
 def load_dataset(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 def load_config(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
-
 
 def evaluate(dataset, cfg, mode):
     draft_model_id = cfg.get("draft_model", None)
@@ -37,6 +34,7 @@ def evaluate(dataset, cfg, mode):
     k = cfg["decode"].get("k", 4)
     num_beams = cfg["decode"].get("num_beams", 5)
     max_tokens = cfg["decode"].get("max_tokens", 50)
+    use_chat_template = cfg["decode"].get("use_chat_template", False)  # ✅ 追加
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -60,24 +58,8 @@ def evaluate(dataset, cfg, mode):
         instruction = " Answer with only the final answer."
         full_prompt = prompt + instruction
 
-        input_ids = target_tokenizer(full_prompt, return_tensors="pt").input_ids.to(
-            device
-        )
-
-        if mode == "greedy":
-            output_ids = decoder(
-                target_model, target_tokenizer, input_ids, device, max_tokens=max_tokens
-            )
-        elif mode == "beam":
-            output_ids = decoder(
-                target_model,
-                target_tokenizer,
-                input_ids,
-                device,
-                num_beams=num_beams,
-                max_tokens=max_tokens,
-            )
-        elif mode == "speculative":
+        if mode == "speculative":
+            input_ids = draft_tokenizer(full_prompt, return_tensors="pt").input_ids.to(device)
             output_ids = decoder(
                 draft_model,
                 target_model,
@@ -85,6 +67,17 @@ def evaluate(dataset, cfg, mode):
                 input_ids,
                 device,
                 k=k,
+                max_tokens=max_tokens,
+                use_chat_template=use_chat_template  # ✅ 追加
+            )
+        else:
+            input_ids = target_tokenizer(full_prompt, return_tensors="pt").input_ids.to(device)
+            output_ids = decoder(
+                target_model,
+                target_tokenizer,
+                input_ids,
+                device,
+                num_beams=num_beams if mode == "beam" else None,
                 max_tokens=max_tokens,
             )
 
@@ -105,6 +98,9 @@ def evaluate(dataset, cfg, mode):
 
 if __name__ == "__main__":
     config = load_config("config/eval.yaml")
+    print("🛠️ Evaluation config:")
+    print(yaml.dump(config, allow_unicode=True))  # ← 読みやすくYAML形式で出力
     dataset = load_dataset(config["dataset"])
     for mode in config["decode"]["modes"]:
         evaluate(dataset, config, mode)
+

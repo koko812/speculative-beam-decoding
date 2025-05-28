@@ -1,8 +1,9 @@
 dataset: datasets/qa_dataset.json
-target_model: Qwen/Qwen2.5-3B-Instruct
+target_model: Qwen/Qwen2.5-3B
 draft_model: Qwen/Qwen2.5-0.5B
 decode:
   modes: ["speculative"]
   k: 4
   num_beams: 5
   max_tokens: 50
+  use_chat_template: false  # ← これを true または false に変更するだけ

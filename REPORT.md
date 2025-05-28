@@ -1,3 +1,166 @@
+# RPORT Log: Beam Search Trace Debugging (2025/5/28)
+
+## 概要
+
+Beam search 生成中の各トークンにおいて、どのビームから来たのかをトレースする仕組みを実験した。
+
+## 試行内容と過程の詳細
+
+### 1. 初期構成
+
+* `Qwen/Qwen2.5-3B-Instruct` を使って beam search を実施。
+* `output_scores=True` によって `outputs.scores` を取得。
+* 生成された各ビーム出力を `outputs.sequences` からトークンごとに解析。
+
+### 2. Beam のトレースを試みる
+
+* `beam_indices` によってどのビームがどこから来たかをトレースしようとしたが、`Qwen` モデルでは `beam_indices` が取得できなかった。
+* ログに `AttributeError: 'GenerateDecoderOnlyOutput' object has no attribute 'beam_indices'` が出力される。
+
+### 3. モデル変更の検討
+
+* beam\_indices をきちんと返すモデルを探す。
+* `GPT2` を使ってみたが、`beam_indices` の shape が (1, sequence\_length) のままで、生成ステップごとの変化が見られず。
+
+### 4. `Qwen1.5-1.8B` に変更して再試行
+
+* `output_scores=True` に加え、`beam_indices` が得られた。
+* ただし `beam_indices` の長さが 1 ステップ分しかなかった。
+* 生成されたシーケンス長（50）と `outputs.scores` の長さ（50）に対して、`beam_indices` は 1 ステップしか提供されない。
+* 他のモデル（`Qwen3-1.7B`, `GPT2`）でも同様の結果。
+
+### 5. 擬似的なトレース方法
+
+* `beam_indices` が壊れている可能性を考慮し、`scores` を用いた擬似的なトレース手法に切り替え。
+* 各ステップの `score_logits` に対して `log_softmax` を取る。
+* 各ビームにおける該当トークンの log probability を比較し、最も尤もらしいビームを `argmax` により推定。
+
+```python
+for step, (token_id, score_logits) in enumerate(zip(token_ids, outputs.scores)):
+    probs = F.log_softmax(score_logits, dim=-1)
+    token_logprobs = probs[:, token_id.item()]
+    best_beam = torch.argmax(token_logprobs).item()
+```
+
+### 6. 擬似的なトレースの限界
+
+* `scores` に含まれるのは「そのステップでの候補ビーム」に限定される。
+* トレースには backpointer（遷移元情報）が必要だが、それは保存されていない。
+* よって、最終的な出力に至るまでにどんなビーム遷移が起きていたのかを完全に復元することはできない。
+* 結果として、現在の実装では「一番尤もらしい遷移」を毎ステップで局所的に推定しているにすぎない。
+
+## 結論と学び
+
+* 多くのモデルでは `beam_indices` が正しく出力されない、またはステップ単位での追跡ができないケースがある。
+* その代替として、`scores` を使って局所的に beam の遷移を「推定」する方法が有効。
+* しかしそれは真のトレースではなく、「擬似的な復元」にすぎない。
+* beam search の内部状態（beam candidates, backpointer）を追うには、transformers ライブラリ自体の改変が必要になる可能性が高い。
+
+## 今後の展望
+
+* Beam 遷移の完全なトレースには、transformers の内部ロジックをフックする方法も検討する。
+* あるいは、小さな独自モデルを用いて beam 遷移を明示的に log 出力する自前生成ループを組むことも一案。
+* 複数モデル（例：大・小モデル）の組み合わせによる協調生成に向けて、まずはビームの挙動をより詳細に可視化するツールを作成していく。
+
+</br>
+</br>
+</br>
+</br>
+</br>
+
+# 🧪 Evaluate QA Accuracy + ChatTemplate Control（v3 - 2025-05-23）
+
+## 🧭 概要
+
+本フェーズでは、speculative decoding における draft モデルへの ChatTemplate 適用を**明示的に制御可能**にする機構を追加し、精度向上と挙動安定性の改善を目指した。これにより、ChatTemplate をもたない draft モデル使用時の異常出力を防止し、正答率が初めて 0% を脱する結果が得られた。
+
+---
+
+## ✅ 改善内容まとめ
+
+### 1. `speculative_generate()` にオプション追加
+
+* `use_chat_template=False` をデフォルト引数として導入
+* `render_prompt()` の呼び出し時に chat template 適用可否を明示指定
+* ChatTemplate 対応・非対応モデル間での挙動差を安全に吸収
+
+### 2. `prompt_renderer.py` の強化
+
+* `tokenizer.chat_template is not None` による安全な template 判定を維持
+* `debug=True` 指定で、ChatTemplate 適用時にレンダリング結果を標準出力に明示表示
+
+### 3. `evaluate.py` 側の強化
+
+* `eval.yaml` に `use_chat_template` オプションを追加
+* `evaluate()` → `speculative_generate()` 呼び出し時にそのまま反映
+
+```yaml
+# eval.yaml の例
+decode:
+  modes: ["speculative"]
+  k: 4
+  max_tokens: 50
+  use_chat_template: true  # ← これを切り替えるだけで挙動変化
+```
+
+---
+
+## 📊 精度改善の傾向
+
+### ❌ ChatTemplate 適用時の誤出力の具体例
+
+以下は ChatTemplate を draft model に適用したことで観測された誤出力例：
+
+* **Q: What is the capital of France?**
+
+  * ❌ 出力: `ParisHuman: Write a title for this article:`
+  * 🔍 問題点: ChatTemplate によってプロンプトテンプレート（例：Human: や Assistant:）がそのまま出力に混入してしまい、構造が破綻する
+
+* **Q: What is H2O?**
+
+  * ❌ 出力: `The answer is: H2O is a molecule consisting of...`
+  * 🔍 問題点: 指定された形式（"only the final answer"）に反し、冗長な解説が追加されてしまう
+
+* **Q: Who wrote 1984?**
+
+  * ✅ 修正後出力: `George Orwell`
+  * 🔍 ChatTemplate を使わなかったことで、冗長な補足文が排除され、簡潔に正答が生成された
+
+* ChatTemplate を適用した結果、プロンプトテンプレートそのものが出力文に混入し、正答の直後に `Human:` や `You are...` などの文言が続くなど不自然な構造が多発したため、
+  本実験では最終的に ChatTemplate は **使用しない設定** が採用された。
+
+* Draft モデルと Target モデルの構文的整合性が増し、Accept トークンが連続する事例が確認された
+
+* 正答率も初めて 0% を脱し、意味のある比較が可能な状態に到達
+
+---
+
+## 📌 反映ファイル一覧
+
+| ファイル                        | 修正点                                    |
+| --------------------------- | -------------------------------------- |
+| `decoding/speculative.py`   | `use_chat_template` 引数の追加と制御処理実装       |
+| `models/prompt_renderer.py` | ChatTemplate 適用/非適用の切替・デバッグ出力          |
+| `experiments/evaluate.py`   | config から `use_chat_template` を渡す処理の追加 |
+
+---
+
+## 📝 所感と次ステップ
+
+* ChatTemplate の有無はモデル選定と密接に関わるため、今後は `AutoTokenizer` のメタデータをより詳細に検査する必要がある
+* draft モデルが Instruct モデルでなくとも ChatTemplate を誤って適用してしまう問題は本修正で解決
+* 次ステップでは `target` モデル側にも ChatTemplate を適用した場合の挙動比較、および `system_prompt` の影響分析を行う予定
+
+---
+
+これにより、実験の信頼性と再現性が一段と向上した。
+
+</br>
+</br>
+</br>
+</br>
+</br>
+
 # 🧪 Evaluate QA Accuracy に関する進捗ログ（v2 - 2025-05-23）
 
 ## 🧭 概要
